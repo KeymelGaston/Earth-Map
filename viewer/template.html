@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tierra real: mapa base para motor de juego</title>
+<style>
+:root{--bg:#eef2f5;--pn:#fff;--ink:#14212b;--mut:#5d6d79;--ln:#cdd6dd;--ac:#0f6b7a;--map:#0b1722;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0c151d;--pn:#13212c;--ink:#e3ecf1;--mut:#8ea1ad;--ln:#26394a;--ac:#4fc3d4}}
+:root[data-theme="dark"]{--bg:#0c151d;--pn:#13212c;--ink:#e3ecf1;--mut:#8ea1ad;--ln:#26394a;--ac:#4fc3d4}
+*{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1100px;margin:0 auto;padding:20px 16px 40px}
+h1{font:600 28px/1.15 Georgia,"Times New Roman",serif;margin:0 0 4px}
+p.s{margin:0 0 16px;color:var(--mut);max-width:72ch}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:var(--pn);border:1px solid var(--ln);border-radius:8px;padding:10px 12px;margin-bottom:12px}
+.bar label{display:flex;gap:6px;align-items:center;color:var(--mut);font-size:13px}
+select,button,textarea{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--ln);border-radius:6px;padding:6px 9px}
+input[type=checkbox]{width:auto}
+button{cursor:pointer;background:var(--ac);color:#fff;border-color:var(--ac);font-weight:600}
+button.g{background:var(--bg);color:var(--ink);border-color:var(--ln)}
+button:focus-visible,select:focus-visible{outline:2px solid var(--ac);outline-offset:2px}
+#cv{display:block;width:100%;aspect-ratio:16/9;background:var(--map);border:1px solid var(--ln);border-radius:8px;cursor:grab;touch-action:none}
+#info{min-height:48px;margin:10px 0;color:var(--mut);font-size:13px;font-variant-numeric:tabular-nums}
+#info b{color:var(--ink)}
+.lg{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px;margin-bottom:14px}
+.lg i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-1px;border:1px solid rgba(0,0,0,.25)}
+details{background:var(--pn);border:1px solid var(--ln);border-radius:8px;padding:10px 12px}
+summary{cursor:pointer;font-weight:600}
+textarea{width:100%;height:150px;margin-top:10px;font:12px/1.4 ui-monospace,Menlo,monospace}
+#ld{position:absolute;color:var(--mut)}
+</style></head><body><main>
+<h1>Tierra real, lista para motor de juego</h1>
+<p class="s">Países, costas, ciudades, relieve y biomas del planeta sobre una rejilla de 1440×720 tiles (0,25° por tile, unos 28 km en el ecuador). Haz clic en el mapa para elegir un chunk y exportarlo.</p>
+<div class="bar">
+<label>Capa <select id="layer"><option value="a">Atlas</option><option value="s">Satélite</option><option value="b">Biomas</option><option value="h">Altura</option><option value="p">Países</option></select></label>
+<label><input type="checkbox" id="wat" checked>Ríos y lagos</label><label><input type="checkbox" id="bor" checked>Fronteras</label><label><input type="checkbox" id="grd">Cuadrícula</label>
+<label><input type="checkbox" id="rel" checked>Relieve</label>
+<label><input type="checkbox" id="cit" checked>Ciudades</label><label><input type="checkbox" id="lab" checked>Nombres</label>
+<label><input type="checkbox" id="chk">Chunks</label>
+<button id="fit" class="g">Ajustar vista</button>
+</div>
+<canvas id="cv"></canvas>
+<div id="info">Cargando datos del planeta…</div>
+<div class="lg" id="lg"></div>
+<details><summary>Exportar un chunk (JSON)</summary>
+<p class="s" style="margin:8px 0 0">Elige un chunk con clic (16×16 tiles). Las capas son filas en hexadecimal: bioma y agua 1 dígito, altura y país 2 dígitos.</p>
+<div style="margin-top:8px"><button id="cp" class="g">Copiar</button></div>
+<textarea id="out" readonly></textarea></details>
+<script>
+const W=1440,H=720,CH=16,$=i=>document.getElementById(i);let META;
+const hx=s=>[1,3,5].map(k=>parseInt(s.substr(k,2),16));
+const BI=[["Océano profundo","#173766"],["Océano","#24518f"],["Aguas bajas","#4a86c2"],["Hielo","#f0f4f6"],["Tundra","#9aa89a"],["Desierto","#d8bd78"],["Pradera y sabana","#8dbd58"],["Bosque","#3d8c45"],["Selva","#1c6838"],["Montaña","#7a736a"],["Alta montaña","#e4e7ea"],["Lago","#5aa0d6"]].map(a=>({n:a[0],h:a[1],c:hx(a[1])}));
+const IMG={};let bio,cty,elv,dep,off,octx,view={x:0,y:0,s:1},sel=null,ARC=[],ISL=[],GEO={rivers:[],lakes:[]},wat;
+const B64="__DATA__",VJ="__VJ__",IM=__IMGS__;for(const k in IM){IMG[k]=new Image();IMG[k].onload=()=>draw();IMG[k].src="data:image/jpeg;base64,"+IM[k]}
+async function inf(b64){const bin=Uint8Array.from(atob(b64),c=>c.charCodeAt(0)),ds=new DecompressionStream("deflate"),w=ds.writable.getWriter();w.write(bin);w.close();return new Uint8Array(await new Response(ds.readable).arrayBuffer())}
+async function load(){if(typeof DecompressionStream==="undefined"){$("info").textContent="Este navegador no soporta la descompresión necesaria. Prueba con una versión reciente de Chrome, Edge, Firefox o Safari.";return}
+$("info").textContent="Descomprimiendo datos del planeta…";const buf=await inf(B64),V=JSON.parse(new TextDecoder().decode(await inf(VJ))),n=W*H;META=V.meta;
+bio=buf.subarray(0,n);cty=buf.subarray(n,2*n);elv=buf.subarray(2*n,3*n);dep=buf.subarray(3*n,4*n);wat=buf.subarray(4*n,5*n);
+ARC=V.arc.map(a=>{const f=Float32Array.from(a,v=>v/100);return{p:f,bb:bbox([f])}});
+ISL=(V.isl||[]).map(a=>{const f=Float32Array.from(a,v=>v/1000);return{p:f,bb:bbox([f])}});
+const G=V.geo,cv2=l=>l.map(r=>{const ps=r[1].map(a=>Float32Array.from(a,v=>v/100));return{r:r[0],p:ps,bb:bbox(ps)}});GEO.rivers=cv2(G.rivers);GEO.lakes=cv2(G.lakes);
+off=document.createElement("canvas");off.width=W;off.height=H;octx=off.getContext("2d");render();fit();$("info").textContent="Pasa el cursor sobre el mapa."}
+const ramp=(S,t)=>{t=Math.max(0,Math.min(1,t))*(S.length-1);const i=Math.min(S.length-2,t|0),f=t-i,a=S[i],c=S[i+1];return[a[0]+(c[0]-a[0])*f,a[1]+(c[1]-a[1])*f,a[2]+(c[2]-a[2])*f]};
+const RL=[[80,150,80],[200,185,100],[140,115,95],[245,245,245]],RO=[[12,34,86],[80,150,205]];
+function cc(id){const h=(id*137.508)%360;return hsl(h,.45,.55)}
+function hsl(h,s,l){const a=s*Math.min(l,1-l),f=n=>{const k=(n+h/30)%12;return l-a*Math.max(-1,Math.min(k-3,9-k,1))};return[f(0)*255,f(8)*255,f(4)*255]}
+function render(){const L=$("layer").value,rel=$("rel").checked,img=octx.createImageData(W,H),d=img.data;
+for(let y=0;y<H;y++)for(let x=0;x<W;x++){const i=y*W+x,b=bio[i],land=b>=3;let c;
+if(L==="b")c=BI[b].c;else if(L==="h")c=land?ramp(RL,elv[i]/255):ramp(RO,dep[i]/255);else c=cty[i]&&land?cc(cty[i]):BI[b].c;
+let k=1;if(rel&&land){const nw=elv[x>0&&y>0?i-W-1:i],se=elv[x<W-1&&y<H-1?i+W+1:i];k=Math.max(.7,Math.min(1.3,1+(se-nw)/255*24))}
+d[i*4]=c[0]*k;d[i*4+1]=c[1]*k;d[i*4+2]=c[2]*k;d[i*4+3]=255}
+octx.putImageData(img,0,0);draw()}
+const sx=lon=>view.x+(lon+180)/360*W*view.s,sy=lat=>view.y+(90-lat)/180*H*view.s;
+function blit(x,src,w,h){const k=(src.naturalWidth||src.width)/W,dx=Math.max(0,view.x),dy=Math.max(0,view.y),ex=Math.min(w,view.x+W*view.s),ey=Math.min(h,view.y+H*view.s);if(ex<=dx||ey<=dy)return;x.drawImage(src,(dx-view.x)/view.s*k,(dy-view.y)/view.s*k,(ex-dx)/view.s*k,(ey-dy)/view.s*k,dx,dy,ex-dx,ey-dy)}
+function bbox(ps){let a=1e9,b=1e9,c=-1e9,d=-1e9;for(const f of ps)for(let i=0;i<f.length;i+=2){const X=f[i],Y=f[i+1];if(X<a)a=X;if(X>c)c=X;if(Y<b)b=Y;if(Y>d)d=Y}return[a,b,c,d]}
+function trace(x,p,st,cl){const n=p.length;x.moveTo(sx(p[0]),sy(p[1]));for(let i=2;i<n-2;i+=2*st)x.lineTo(sx(p[i]),sy(p[i+1]));x.lineTo(sx(p[n-2]),sy(p[n-1]));if(cl)x.closePath()}
+function draw(){if(!off)return;const cv=$("cv"),w=cv.clientWidth,h=cv.clientHeight,dpr=devicePixelRatio||1;
+if(cv.width!==Math.round(w*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr)}
+const x=cv.getContext("2d");x.setTransform(dpr,0,0,dpr,0,0);x.fillStyle="#0b1722";x.fillRect(0,0,w,h);
+const L=$("layer").value,pic=IMG[L];x.imageSmoothingEnabled=true;x.imageSmoothingQuality="high";
+if(pic&&pic.complete)blit(x,pic,w,h);else{x.imageSmoothingEnabled=view.s<3;blit(x,off,w,h)}
+const pw=W*view.s/360,V=[(-view.x)/(W*view.s)*360-180,90-(h-view.y)/(H*view.s)*180,(w-view.x)/(W*view.s)*360-180,90+view.y/(H*view.s)*180],st=Math.max(1,Math.round(40/pw)),hit=b=>b[2]>=V[0]&&b[0]<=V[2]&&b[3]>=V[1]&&b[1]<=V[3];
+x.lineJoin="round";x.lineCap="round";
+{x.fillStyle=pic?"rgba(214,199,150,.96)":"#8dbd58";x.strokeStyle=pic?"rgba(80,58,38,.85)":"rgba(20,40,20,.7)";x.lineWidth=.7;
+for(const o of ISL){if(!hit(o.bb))continue;const sw=(o.bb[2]-o.bb[0])*pw;x.beginPath();if(sw<2.5)x.arc(sx((o.bb[0]+o.bb[2])/2),sy((o.bb[1]+o.bb[3])/2),Math.max(1.5,sw/2+.8),0,7);else trace(x,o.p,st,1);x.fill();x.stroke()}}
+if($("wat").checked){const mr=view.s<2?3:view.s<4?5:view.s<8?7:9,rr=view.s<2?3:view.s<4?5:view.s<8?7:10;
+x.fillStyle=pic?"rgba(118,170,214,.93)":"rgba(80,140,200,.92)";x.strokeStyle=pic?"rgba(55,105,155,.9)":"rgba(170,205,235,.85)";x.lineWidth=.8;
+for(const l of GEO.lakes){if(l.r>mr||!hit(l.bb))continue;x.beginPath();for(const p of l.p)trace(x,p,st,1);x.fill();x.stroke()}
+x.strokeStyle=pic?"rgba(70,130,190,.95)":"rgba(110,170,230,.95)";
+for(const r of GEO.rivers){if(r.r>rr||!hit(r.bb))continue;x.lineWidth=(r.r<=3?1.9:r.r<=6?1.2:.8)*(1+Math.log2(Math.max(1,view.s))/5);x.beginPath();for(const p of r.p)trace(x,p,st,0);x.stroke()}}
+if($("bor").checked){x.strokeStyle=pic?"rgba(70,50,35,.6)":"rgba(255,255,255,.55)";x.lineWidth=pic?.8:.8;x.beginPath();for(const a of ARC){if(hit(a.bb))trace(x,a.p,st,0)}x.stroke()}
+if($("grd").checked){const d=pw>200?.5:pw>80?1:pw>30?5:pw>12?10:30;x.strokeStyle="rgba(255,255,255,.28)";x.lineWidth=1;x.beginPath();
+for(let i=Math.ceil(V[0]/d);i*d<=V[2];i++){const p=sx(i*d);x.moveTo(p,0);x.lineTo(p,h)}for(let i=Math.ceil(V[1]/d);i*d<=V[3];i++){const p=sy(i*d);x.moveTo(0,p);x.lineTo(w,p)}x.stroke();
+x.fillStyle=pic?"#22313d":"#d8e6ee";x.font="10px system-ui,sans-serif";for(let i=Math.ceil(V[0]/d);i*d<=V[2];i++)x.fillText(+(i*d).toFixed(1)+"°",sx(i*d)+3,h-44);for(let i=Math.ceil(V[1]/d);i*d<=V[3];i++)x.fillText(+(i*d).toFixed(1)+"°",4,sy(i*d)-3)}
+if($("chk").checked){x.strokeStyle="rgba(255,255,255,.3)";x.lineWidth=1;x.beginPath();for(let i=0;i<=W;i+=CH){x.moveTo(view.x+i*view.s,view.y);x.lineTo(view.x+i*view.s,view.y+H*view.s)}for(let j=0;j<=H;j+=CH){x.moveTo(view.x,view.y+j*view.s);x.lineTo(view.x+W*view.s,view.y+j*view.s)}x.stroke()}
+if(sel){x.strokeStyle="#ffd54a";x.lineWidth=2;x.strokeRect(view.x+sel[0]*CH*view.s,view.y+sel[1]*CH*view.s,CH*view.s,CH*view.s)}
+if($("lab").checked){x.textAlign="center";x.lineJoin="round";
+x.font="italic "+Math.max(13,Math.min(34,pw*7))+"px Georgia,serif";x.fillStyle=pic?"rgba(25,55,95,.55)":"rgba(255,255,255,.4)";
+for(const o of [["Océano Pacífico",-150,5],["Océano Pacífico",165,-15],["Océano Atlántico",-35,15],["Océano Atlántico",-20,-30],["Océano Índico",80,-22],["Océano Glacial Ártico",0,84],["Océano Austral",60,-62]])x.fillText(o[0],sx(o[1]),sy(o[2]));
+for(const c of META.labels){const span=c[3]*pw,sz=Math.max(9,Math.min(22,span*.11));if(span<c[0].length*sz*.62)continue;x.font="600 "+sz+"px Georgia,serif";x.lineWidth=3;x.strokeStyle=pic?"rgba(255,255,255,.7)":"rgba(0,0,0,.7)";x.fillStyle=pic?"#3a2c1c":"#fff";const px=sx(c[1]),py=sy(c[2]);x.strokeText(c[0],px,py);x.fillText(c[0],px,py)}x.textAlign="start"}
+if($("cit").checked){x.font="600 11px system-ui,sans-serif";x.lineJoin="round";const min=view.s<1.5?3e6:view.s<3?1.5e6:view.s<6?5e5:view.s<12?2e5:0,used=new Set();
+for(const c of META.cities){if(!c[4]&&c[3]<min)continue;const px=sx(c[1]),py=sy(c[2]);if(px<-20||py<-20||px>w+20||py>h+20)continue;
+x.fillStyle=c[4]?"#e0a800":"#fff";x.strokeStyle="#1a1a1a";x.lineWidth=1.6;x.beginPath();x.arc(px,py,c[4]?4:3,0,7);x.fill();x.stroke();if(c[4]){x.beginPath();x.arc(px,py,1.3,0,7);x.fillStyle="#1a1a1a";x.fill()}
+if(view.s>=1.6){const k=(px/85|0)+","+(py/16|0);if(!used.has(k)){used.add(k);x.lineWidth=3;x.strokeStyle="rgba(0,0,0,.75)";x.strokeText(c[0],px+7,py+4);x.fillStyle="#fff";x.fillText(c[0],px+7,py+4)}}}}
+{const kp=111.32*Math.cos((V[1]+V[3])/2*Math.PI/180)/pw,tg=kp*110,nice=[.1,.2,.5,1,2,5,10,20,50,100,200,500,1000,2000,5000,10000];let km=nice[0];for(const v of nice)if(v<=tg)km=v;const len=km/kp;
+x.fillStyle="rgba(0,0,0,.55)";x.fillRect(10,h-38,len+16,28);x.strokeStyle="#fff";x.lineWidth=2;x.beginPath();x.moveTo(18,h-20);x.lineTo(18+len,h-20);x.moveTo(18,h-25);x.lineTo(18,h-16);x.moveTo(18+len,h-25);x.lineTo(18+len,h-16);x.stroke();x.fillStyle="#fff";x.font="11px system-ui,sans-serif";x.fillText(km>=1?km+" km":km*1000+" m",18,h-27)}}
+function fit(){view.s=$("cv").clientWidth/W;view.x=view.y=0;draw()}
+function tileAt(e){const r=$("cv").getBoundingClientRect(),x=Math.floor((e.clientX-r.left-view.x)/view.s),y=Math.floor((e.clientY-r.top-view.y)/view.s);return x>=0&&y>=0&&x<W&&y<H?[x,y]:null}
+const cv=$("cv");let drag=null,moved=0;
+cv.addEventListener("pointerdown",e=>{cv.setPointerCapture(e.pointerId);moved=0;drag={x:e.clientX-view.x,y:e.clientY-view.y}});
+cv.addEventListener("pointerup",e=>{drag=null;if(moved<4){const t=tileAt(e);if(t){sel=[t[0]/CH|0,t[1]/CH|0];exportChunk();draw()}}});
+cv.addEventListener("pointermove",e=>{if(!bio)return;if(drag){moved+=Math.abs(e.movementX)+Math.abs(e.movementY);view.x=e.clientX-drag.x;view.y=e.clientY-drag.y;draw();return}
+const t=tileAt(e);if(!t)return;const[x,y]=t,i=y*W+x,lon=((x+.5)/W*360-180).toFixed(2),lat=(90-(y+.5)/H*180).toFixed(2),b=bio[i],land=b>=3;
+const c=META.cities.find(c=>Math.abs((c[1]+180)/360*W-x-.5)<1.2&&Math.abs((90-c[2])/180*H-y-.5)<1.2);
+$("info").innerHTML=`<b>${BI[b].n}</b>${wat[i]===1?" · río":""}${land&&cty[i]?" · "+META.names[cty[i]-1]:""} · lat ${lat}, lon ${lon} · tile ${x}, ${y} · chunk ${x/CH|0}, ${y/CH|0}<br>${land?"Altura relativa "+elv[i]+" de 255 (≈ "+Math.round(elv[i]*20)+" m)":"Fondo marino"}${c?` · <b>${c[0]}</b>${c[4]?" (capital)":""}, ${c[3].toLocaleString("es")} hab.`:""}`});
+cv.addEventListener("wheel",e=>{e.preventDefault();const r=cv.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top,s=Math.max(.5,Math.min(40,view.s*(e.deltaY<0?1.2:1/1.2))),k=s/view.s;view.x=mx-(mx-view.x)*k;view.y=my-(my-view.y)*k;view.s=s;draw()},{passive:false});
+["layer","rel"].forEach(i=>$(i).onchange=render);["bor","cit","chk","lab","wat","grd"].forEach(i=>$(i).onchange=draw);
+$("fit").onclick=fit;addEventListener("resize",draw);
+$("lg").innerHTML=BI.map(b=>`<span><i style="background:${b.h}"></i>${b.n}</span>`).join("");
+function exportChunk(){const[cx,cy]=sel,rows=f=>{const o=[];for(let j=0;j<CH;j++){let s="";for(let i=0;i<CH;i++)s+=f((cy*CH+j)*W+cx*CH+i);o.push(s)}return o},h2=v=>v.toString(16).padStart(2,"0"),x0=cx*CH,y0=cy*CH;
+$("out").value=JSON.stringify({chunk:[cx,cy],tileSize:CH,degreesPerTile:.25,origin:{lon:x0/4-180,lat:90-y0/4},layers:{biome:rows(i=>bio[i].toString(16)),height:rows(i=>h2(elv[i])),country:rows(i=>h2(cty[i])),water:rows(i=>wat[i].toString(16))},countries:META.names,biomes:BI.map((b,i)=>({id:i,name:b.n}))})}
+$("cp").onclick=async()=>{const t=$("out");t.select();try{await navigator.clipboard.writeText(t.value)}catch(_){document.execCommand("copy")}};
+load().catch(e=>{$("info").textContent="Error al cargar: "+(e&&e.message||e)});
+</script></main></body></html>
